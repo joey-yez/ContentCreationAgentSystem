@@ -8,7 +8,7 @@ load_dotenv()
 class OutlineAgent:
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.model = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
     
     def generate_outline(self, topic: str, style: Optional[str] = None, 
                          audience: Optional[str] = None, 
