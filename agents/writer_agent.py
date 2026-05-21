@@ -1,14 +1,9 @@
 from typing import Optional, Dict, Any
-from openai import OpenAI
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from llm_client import LLMClient
 
 class WriterAgent:
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
+        self.llm = LLMClient()
     
     def write_section(self, topic: str, section_title: str, 
                       section_summary: str, previous_sections: str = "",
@@ -49,22 +44,20 @@ class WriterAgent:
 - 使用适当的 Markdown 格式（标题、列表等）
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": "你是一位专业的技术写作者，擅长撰写深度分析文章。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.8
-        )
+        messages = [
+            {"role": "system", "content": "你是一位专业的技术写作者，擅长撰写深度分析文章。"},
+            {"role": "user", "content": prompt}
+        ]
+        
+        content = self.llm.chat(messages, temperature=0.8)
         
         import json
         try:
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(content)
             return result
         except:
             return {
-                "content": response.choices[0].message.content,
+                "content": content,
                 "summary": section_summary
             }
     
@@ -98,21 +91,19 @@ class WriterAgent:
 - 保持与上下文的连贯性
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": "你是一位专业的内容编辑，擅长根据用户反馈修改文章。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
+        messages = [
+            {"role": "system", "content": "你是一位专业的内容编辑，擅长根据用户反馈修改文章。"},
+            {"role": "user", "content": prompt}
+        ]
+        
+        content = self.llm.chat(messages, temperature=0.7)
         
         import json
         try:
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(content)
             return result
         except:
             return {
-                "content": response.choices[0].message.content,
+                "content": content,
                 "summary": ""
             }

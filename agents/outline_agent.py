@@ -1,14 +1,9 @@
 from typing import List, Optional, Dict, Any
-from openai import OpenAI
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from llm_client import LLMClient
 
 class OutlineAgent:
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
+        self.llm = LLMClient()
     
     def generate_outline(self, topic: str, style: Optional[str] = None, 
                          audience: Optional[str] = None, 
@@ -55,21 +50,19 @@ class OutlineAgent:
 }}
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": "你是一位专业的内容策划师和编辑，擅长为各种主题生成结构化的文章大纲。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
+        messages = [
+            {"role": "system", "content": "你是一位专业的内容策划师和编辑，擅长为各种主题生成结构化的文章大纲。"},
+            {"role": "user", "content": prompt}
+        ]
+        
+        content = self.llm.chat(messages, temperature=0.7)
         
         import json
         try:
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(content)
             return result
         except:
-            return self._parse_fallback(response.choices[0].message.content)
+            return self._parse_fallback(content)
     
     def _parse_fallback(self, content: str) -> Dict[str, Any]:
         lines = content.strip().split('\n')
