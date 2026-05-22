@@ -9,8 +9,8 @@ runtime = RuntimeLoop()
 export_tool = MarkdownExportTool()
 
 @app.command()
-def new(topic: str, style: str = None, audience: str = None, words: int = None):
-    task_id = runtime.create_task(topic, style, audience, words)
+def new(topic: str, style: str = None, audience: str = None, words: int = None, sections: int = None):
+    task_id = runtime.create_task(topic, style, audience, words, sections)
     typer.echo(f"创建任务成功！Task ID: {task_id}")
     
     result = runtime.run(task_id)
@@ -18,12 +18,25 @@ def new(topic: str, style: str = None, audience: str = None, words: int = None):
         state = result.get("state")
         show_outline(state)
         
-        approval = typer.prompt("请确认大纲是否满意？(y/n)", default="n")
-        if approval.lower() == "y":
-            runtime.approve_outline(task_id)
-            draft(task_id)
-        else:
-            typer.echo("请修改大纲后重新确认")
+        while True:
+            action = typer.prompt("请选择操作：(a)批准大纲 / (r)修改大纲 / (q)退出", default="a")
+            if action.lower() == "a":
+                runtime.approve_outline(task_id)
+                draft(task_id)
+                break
+            elif action.lower() == "r":
+                feedback = typer.prompt("请输入对大纲的修改意见")
+                revise_result = runtime.revise_outline(task_id, feedback)
+                if revise_result.get("error"):
+                    typer.echo(f"错误: {revise_result['error']}")
+                else:
+                    typer.echo(f"\n大纲已修改，第 {revise_result['revision_count']} 次修订")
+                    state = runtime.get_state(task_id).dict()
+                    show_outline(state)
+            elif action.lower() == "q":
+                break
+            else:
+                typer.echo("无效选项，请选择 a/r/q")
 
 @app.command()
 def draft(task_id: str):
@@ -54,6 +67,16 @@ def draft(task_id: str):
                 break
 
 @app.command()
+def revise_outline_cmd(task_id: str, feedback: str):
+    result = runtime.revise_outline(task_id, feedback)
+    if result.get("error"):
+        typer.echo(f"错误: {result['error']}")
+    else:
+        typer.echo(f"大纲已修改，第 {result['revision_count']} 次修订")
+        state = runtime.get_state(task_id).dict()
+        show_outline(state)
+
+@app.command()
 def export(task_id: str):
     state = runtime.get_state(task_id)
     if not state:
@@ -77,6 +100,33 @@ def show(task_id: str):
         return
     
     show_progress(state.dict())
+
+@app.command()
+def show_memory(task_id: str):
+    memory = runtime.get_memory(task_id)
+    if not memory:
+        typer.echo("Memory not found")
+        return
+    
+    typer.echo("\n" + "="*60)
+    typer.echo("Memory 信息")
+    typer.echo("="*60)
+    
+    initial = memory.get_initial_input()
+    typer.echo("\n【初始输入】")
+    typer.echo(f"- 主题: {initial.get('topic')}")
+    typer.echo(f"- 风格: {initial.get('style', '未指定')}")
+    typer.echo(f"- 受众: {initial.get('audience', '未指定')}")
+    typer.echo(f"- 预计字数: {initial.get('estimated_words', '未指定')}")
+    typer.echo(f"- 预计段落数: {initial.get('estimated_sections', '未指定')}")
+    
+    feedback_history = memory.get_all_feedback()
+    typer.echo("\n【反馈历史】")
+    for i, feedback in enumerate(feedback_history, 1):
+        typer.echo(f"{i}. [{feedback['phase']}] {feedback['feedback']}")
+    
+    typer.echo(f"\n【修订次数】: {memory.memory['revision_count']}")
+    typer.echo("\n" + "="*60)
 
 def show_outline(state: dict):
     typer.echo("\n" + "="*60)

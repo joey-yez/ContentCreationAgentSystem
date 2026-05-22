@@ -64,6 +64,76 @@ class OutlineAgent:
         except:
             return self._parse_fallback(content)
     
+    def revise_outline(self, topic: str, current_outline: Dict[str, Any], 
+                       feedback: str, previous_feedback: str = "",
+                       style: Optional[str] = None, 
+                       audience: Optional[str] = None) -> Dict[str, Any]:
+        style_text = f"风格：{style}" if style else ""
+        audience_text = f"目标读者：{audience}" if audience else ""
+        
+        current_outline_str = json.dumps(current_outline, ensure_ascii=False, indent=2)
+        
+        previous_feedback_text = f"""
+之前的修改反馈：
+{previous_feedback}
+""" if previous_feedback else ""
+        
+        prompt = f"""
+你是一位专业的内容策划师。请根据用户反馈修改以下文章大纲：
+
+文章主题：{topic}
+{style_text}
+{audience_text}
+
+{previous_feedback_text}
+
+当前大纲：
+{current_outline_str}
+
+用户反馈：
+{feedback}
+
+请根据用户反馈修改大纲，注意保持与原始要求的一致性。
+
+输出格式要求：
+- 使用 JSON 格式输出
+- 包含 "title" (字符串) 和 "sections" (数组)
+- 每个 section 包含 "id", "title", "summary", "subsections" (数组)
+- subsections 包含 "id", "title"
+
+示例输出格式：
+{{
+  "title": "文章标题",
+  "sections": [
+    {{
+      "id": 1,
+      "title": "第一章：引言",
+      "summary": "介绍主题背景和重要性",
+      "subsections": [
+        {{
+          "id": 1.1,
+          "title": "研究背景"
+        }}
+      ]
+    }}
+  ]
+}}
+"""
+        
+        messages = [
+            {"role": "system", "content": "你是一位专业的内容策划师和编辑，擅长根据用户反馈修改文章大纲。"},
+            {"role": "user", "content": prompt}
+        ]
+        
+        content = self.llm.chat(messages, temperature=0.7)
+        
+        import json
+        try:
+            result = json.loads(content)
+            return result
+        except:
+            return self._parse_fallback(content)
+    
     def _parse_fallback(self, content: str) -> Dict[str, Any]:
         lines = content.strip().split('\n')
         sections = []

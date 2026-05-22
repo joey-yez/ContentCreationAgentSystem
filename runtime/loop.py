@@ -6,6 +6,7 @@ from agents.outline_agent import OutlineAgent
 from agents.writer_agent import WriterAgent
 from tools.markdown_export import MarkdownExportTool
 from tools.file_storage import FileStorageTool
+from memory.memory_store import Memory
 import uuid
 
 class RuntimeLoop:
@@ -19,7 +20,8 @@ class RuntimeLoop:
     
     def create_task(self, topic: str, style: Optional[str] = None, 
                     audience: Optional[str] = None, 
-                    estimated_words: Optional[int] = None) -> str:
+                    estimated_words: Optional[int] = None,
+                    estimated_sections: Optional[int] = None) -> str:
         task_id = f"article_{uuid.uuid4().hex[:8]}"
         state = ArticleState(
             task_id=task_id,
@@ -30,6 +32,17 @@ class RuntimeLoop:
             phase=ArticlePhase.CREATED
         )
         self.state_manager.save_state(state)
+        
+        memory = Memory(task_id)
+        memory.store_initial_input(
+            topic=topic,
+            style=style,
+            audience=audience,
+            estimated_words=estimated_words,
+            estimated_sections=estimated_sections
+        )
+        memory.save()
+        
         return task_id
     
     def run(self, task_id: str) -> Dict[str, Any]:
@@ -144,6 +157,63 @@ class RuntimeLoop:
         state.metadata["export_path"] = export_path
         state.phase = ArticlePhase.EXPORTED
     
+    def revise_outline(self, task_id: str, feedback: str) -> Dict[str, Any]:
+        state = self.state_manager.load_state(task_id)
+        if not state:
+            return {"error": "Task not found"}
+        
+        if state.phase != ArticlePhase.WAITING_USER_APPROVAL:
+            return {"error": "Not in outline review phase"}
+        
+        memory = Memory.load(task_id)
+        memory.add_feedback("outline_review", feedback)
+        memory.save()
+        
+        current_outline = {
+            "title": state.metadata.get("title", state.topic),
+            "sections": [
+                {
+                    "id": s.id,
+                    "title": s.title,
+                    "summary": s.summary,
+                    "subsections": []
+                }
+                for s in state.sections
+            ]
+        }
+        
+        previous_feedback = memory.get_feedback_summary()
+        
+        revised_outline = self.outline_agent.revise_outline(
+            topic=state.topic,
+            current_outline=current_outline,
+            feedback=feedback,
+            previous_feedback=previous_feedback,
+            style=state.style,
+            audience=state.audience
+        )
+        
+        state.sections = []
+        state.metadata["title"] = revised_outline.get("title", state.topic)
+        
+        for section_data in revised_outline.get("sections", []):
+            section = Section(
+                id=int(section_data["id"]),
+                title=section_data.get("title", ""),
+                summary=section_data.get("summary", "")
+            )
+            state.sections.append(section)
+        
+        self.state_manager.save_state(state)
+        
+        return {
+            "status": "outline_revised",
+            "task_id": task_id,
+            "title": state.metadata["title"],
+            "sections_count": len(state.sections),
+            "revision_count": memory.memory["revision_count"]
+        }
+    
     def approve_outline(self, task_id: str) -> None:
         state = self.state_manager.load_state(task_id)
         if state and state.phase == ArticlePhase.WAITING_USER_APPROVAL:
@@ -154,6 +224,11 @@ class RuntimeLoop:
         state = self.state_manager.load_state(task_id)
         if state:
             self.state_manager.add_feedback(task_id, feedback)
+            
+            memory = Memory.load(task_id)
+            memory.add_feedback("draft_review", feedback)
+            memory.save()
+            
             state.phase = ArticlePhase.REVISING
             
             for section in state.sections:
@@ -179,3 +254,6 @@ class RuntimeLoop:
     
     def get_state(self, task_id: str) -> Optional[ArticleState]:
         return self.state_manager.load_state(task_id)
+    
+    def get_memory(self, task_id: str) -> Optional[Memory]:
+        return Memory.load(task_id)
