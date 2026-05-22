@@ -48,7 +48,7 @@ class StateManager:
         file_path = os.path.join(self.storage_path, f"{state.task_id}.json")
         state.last_updated = datetime.now()
         with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(state.dict(), f, default=str, ensure_ascii=False, indent=2)
+            json.dump(state.model_dump(), f, default=str, ensure_ascii=False, indent=2)
     
     def load_state(self, task_id: str) -> Optional[ArticleState]:
         file_path = os.path.join(self.storage_path, f"{task_id}.json")

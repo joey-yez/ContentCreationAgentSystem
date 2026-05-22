@@ -1,5 +1,6 @@
-from typing import List, Optional, Dict, Any
-from llm_client import LLMClient
+import json
+from typing import List, Optional, Dict, Any, Tuple
+from llm_client import LLMClient, LLMResult
 
 class OutlineAgent:
     def __init__(self):
@@ -7,7 +8,7 @@ class OutlineAgent:
     
     def generate_outline(self, topic: str, style: Optional[str] = None, 
                          audience: Optional[str] = None, 
-                         estimated_words: Optional[int] = None) -> Dict[str, Any]:
+                         estimated_words: Optional[int] = None) -> Tuple[Dict[str, Any], Dict[str, float]]:
         style_text = f"风格：{style}" if style else ""
         audience_text = f"目标读者：{audience}" if audience else ""
         length_text = f"预计字数：{estimated_words}" if estimated_words else ""
@@ -55,19 +56,26 @@ class OutlineAgent:
             {"role": "user", "content": prompt}
         ]
         
-        content = self.llm.chat(messages, temperature=0.7)
+        llm_result: LLMResult = self.llm.chat(messages, temperature=0.7)
         
-        import json
         try:
-            result = json.loads(content)
-            return result
+            result = json.loads(llm_result.content)
         except:
-            return self._parse_fallback(content)
+            result = self._parse_fallback(llm_result.content, topic)
+        
+        metrics = {
+            "duration": llm_result.duration,
+            "prompt_tokens": llm_result.prompt_tokens,
+            "completion_tokens": llm_result.completion_tokens,
+            "total_tokens": llm_result.total_tokens
+        }
+        
+        return result, metrics
     
     def revise_outline(self, topic: str, current_outline: Dict[str, Any], 
                        feedback: str, previous_feedback: str = "",
                        style: Optional[str] = None, 
-                       audience: Optional[str] = None) -> Dict[str, Any]:
+                       audience: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, float]]:
         style_text = f"风格：{style}" if style else ""
         audience_text = f"目标读者：{audience}" if audience else ""
         
@@ -125,26 +133,33 @@ class OutlineAgent:
             {"role": "user", "content": prompt}
         ]
         
-        content = self.llm.chat(messages, temperature=0.7)
+        llm_result: LLMResult = self.llm.chat(messages, temperature=0.7)
         
-        import json
         try:
-            result = json.loads(content)
-            return result
+            result = json.loads(llm_result.content)
         except:
-            return self._parse_fallback(content)
+            result = self._parse_fallback(llm_result.content, topic)
+        
+        metrics = {
+            "duration": llm_result.duration,
+            "prompt_tokens": llm_result.prompt_tokens,
+            "completion_tokens": llm_result.completion_tokens,
+            "total_tokens": llm_result.total_tokens
+        }
+        
+        return result, metrics
     
-    def _parse_fallback(self, content: str) -> Dict[str, Any]:
+    def _parse_fallback(self, content: str, topic: str) -> Dict[str, Any]:
         lines = content.strip().split('\n')
         sections = []
         current_section = None
         section_id = 1
+        fallback_title = topic
         
         for line in lines:
             line = line.strip()
             if line.startswith('# '):
-                title = line[2:].strip()
-                return {"title": title, "sections": []}
+                fallback_title = line[2:].strip()
             elif line.startswith('## '):
                 if current_section:
                     sections.append(current_section)
@@ -165,4 +180,4 @@ class OutlineAgent:
         if current_section:
             sections.append(current_section)
         
-        return {"title": topic, "sections": sections} if sections else {"title": topic, "sections": []}
+        return {"title": fallback_title, "sections": sections}

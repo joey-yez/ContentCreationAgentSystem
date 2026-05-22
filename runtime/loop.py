@@ -4,9 +4,12 @@ from runtime.context import Context
 from runtime.planner import Planner
 from agents.outline_agent import OutlineAgent
 from agents.writer_agent import WriterAgent
+from agents.evaluator_agent import EvaluatorAgent
+from agents.feedback_analyzer import FeedbackAnalyzer
 from tools.markdown_export import MarkdownExportTool
 from tools.file_storage import FileStorageTool
 from memory.memory_store import Memory
+from evaluation import Evaluation
 import uuid
 
 class RuntimeLoop:
@@ -15,6 +18,8 @@ class RuntimeLoop:
         self.planner = Planner()
         self.outline_agent = OutlineAgent()
         self.writer_agent = WriterAgent()
+        self.evaluator_agent = EvaluatorAgent()
+        self.feedback_analyzer = FeedbackAnalyzer()
         self.export_tool = MarkdownExportTool()
         self.storage_tool = FileStorageTool()
     
@@ -43,10 +48,14 @@ class RuntimeLoop:
         )
         memory.save()
         
+        evaluation = Evaluation(task_id)
+        evaluation.save()
+        
         return task_id
     
     def run(self, task_id: str) -> Dict[str, Any]:
         state = self.state_manager.load_state(task_id)
+        evaluation = Evaluation.load(task_id)
         if not state:
             return {"error": "Task not found"}
         
@@ -56,39 +65,48 @@ class RuntimeLoop:
                     "status": "waiting_user_input",
                     "phase": state.phase.value,
                     "task_id": task_id,
-                    "state": state.dict()
+                    "state": state.model_dump()
                 }
             
             if state.phase == ArticlePhase.CREATED:
                 self._process_created(state)
             elif state.phase == ArticlePhase.UNDERSTANDING_TOPIC:
-                self._process_understanding_topic(state)
+                self._process_understanding_topic(state, evaluation)
             elif state.phase == ArticlePhase.OUTLINE_GENERATED:
                 self._process_outline_generated(state)
             elif state.phase == ArticlePhase.DRAFTING:
-                self._process_drafting(state)
+                self._process_drafting(state, evaluation)
             elif state.phase == ArticlePhase.WAITING_REVIEW:
                 pass
             elif state.phase == ArticlePhase.READY_TO_EXPORT:
-                self._process_ready_to_export(state)
+                self._process_ready_to_export(state, evaluation)
             
             self.state_manager.save_state(state)
+            evaluation.save()
         
         return {
             "status": "completed",
             "task_id": task_id,
-            "state": state.dict()
+            "state": state.model_dump(),
+            "evaluation": evaluation.get_summary()
         }
     
     def _process_created(self, state: ArticleState) -> None:
         state.phase = ArticlePhase.UNDERSTANDING_TOPIC
     
-    def _process_understanding_topic(self, state: ArticleState) -> None:
-        outline_result = self.outline_agent.generate_outline(
+    def _process_understanding_topic(self, state: ArticleState, evaluation: Evaluation) -> None:
+        outline_result, metrics = self.outline_agent.generate_outline(
             topic=state.topic,
             style=state.style,
             audience=state.audience,
             estimated_words=state.estimated_words
+        )
+        
+        evaluation.record_outline_generation(
+            duration=metrics["duration"],
+            prompt_tokens=metrics["prompt_tokens"],
+            completion_tokens=metrics["completion_tokens"],
+            total_tokens=metrics["total_tokens"]
         )
         
         state.metadata["title"] = outline_result.get("title", state.topic)
@@ -106,7 +124,7 @@ class RuntimeLoop:
     def _process_outline_generated(self, state: ArticleState) -> None:
         state.phase = ArticlePhase.WAITING_USER_APPROVAL
     
-    def _process_drafting(self, state: ArticleState) -> None:
+    def _process_drafting(self, state: ArticleState, evaluation: Evaluation) -> None:
         pending_sections = [s for s in state.sections if not s.completed]
         
         if not pending_sections:
@@ -121,13 +139,20 @@ class RuntimeLoop:
             if s.completed and s.id < current_section.id
         ])
         
-        result = self.writer_agent.write_section(
+        result, metrics = self.writer_agent.write_section(
             topic=state.topic,
             section_title=current_section.title,
             section_summary=current_section.summary or "",
             previous_sections=previous_sections_summary,
             style=state.style,
             audience=state.audience
+        )
+        
+        evaluation.record_article_section(
+            duration=metrics["duration"],
+            prompt_tokens=metrics["prompt_tokens"],
+            completion_tokens=metrics["completion_tokens"],
+            total_tokens=metrics["total_tokens"]
         )
         
         self.state_manager.update_section(
@@ -142,7 +167,7 @@ class RuntimeLoop:
             state.sections = updated_state.sections
             state.current_section = updated_state.current_section
     
-    def _process_ready_to_export(self, state: ArticleState) -> None:
+    def _process_ready_to_export(self, state: ArticleState, evaluation: Evaluation) -> None:
         sections_data = [
             {"title": s.title, "content": s.content or ""}
             for s in state.sections
@@ -154,11 +179,87 @@ class RuntimeLoop:
             task_id=state.task_id
         )
         
+        memory = Memory.load(state.task_id)
+        user_requirements = memory.get_initial_input()
+        
+        outline_dict = {
+            "title": state.metadata.get("title", state.topic),
+            "sections": [
+                {"id": s.id, "title": s.title, "summary": s.summary}
+                for s in state.sections
+            ]
+        }
+        
+        article_content = "\n\n".join([f"## {s.title}\n\n{s.content}" for s in state.sections])
+        
+        article_eval_result = self.evaluator_agent.evaluate_article(
+            topic=state.topic,
+            outline=outline_dict,
+            article_content=article_content,
+            user_requirements=user_requirements
+        )
+        
+        evaluation.record_article_evaluation(
+            score=article_eval_result.score,
+            feedback=article_eval_result.feedback,
+            criteria=article_eval_result.criteria
+        )
+        
+        evaluation.finish()
+        
         state.metadata["export_path"] = export_path
         state.phase = ArticlePhase.EXPORTED
     
+    def approve_outline(self, task_id: str) -> Dict[str, Any]:
+        state = self.state_manager.load_state(task_id)
+        evaluation = Evaluation.load(task_id)
+        
+        if not state:
+            return {"error": "Task not found"}
+        
+        if state.phase != ArticlePhase.WAITING_USER_APPROVAL:
+            return {"error": "Not in outline review phase"}
+        
+        memory = Memory.load(task_id)
+        user_requirements = memory.get_initial_input()
+        
+        outline_dict = {
+            "title": state.metadata.get("title", state.topic),
+            "sections": [
+                {"id": s.id, "title": s.title, "summary": s.summary}
+                for s in state.sections
+            ]
+        }
+        
+        outline_eval_result = self.evaluator_agent.evaluate_outline(
+            topic=state.topic,
+            outline=outline_dict,
+            user_requirements=user_requirements
+        )
+        
+        evaluation.record_outline_evaluation(
+            score=outline_eval_result.score,
+            feedback=outline_eval_result.feedback,
+            criteria=outline_eval_result.criteria
+        )
+        evaluation.save()
+        
+        state.phase = ArticlePhase.DRAFTING
+        self.state_manager.save_state(state)
+        
+        return {
+            "status": "outline_approved",
+            "evaluation": {
+                "score": outline_eval_result.score,
+                "feedback": outline_eval_result.feedback,
+                "criteria": outline_eval_result.criteria
+            }
+        }
+    
     def revise_outline(self, task_id: str, feedback: str) -> Dict[str, Any]:
         state = self.state_manager.load_state(task_id)
+        evaluation = Evaluation.load(task_id)
+        
         if not state:
             return {"error": "Task not found"}
         
@@ -167,6 +268,22 @@ class RuntimeLoop:
         
         memory = Memory.load(task_id)
         memory.add_feedback("outline_review", feedback)
+        
+        current_requirements = memory.get_current_requirements()
+        
+        analysis_result = self.feedback_analyzer.analyze_and_update_memory(
+            current_requirements, feedback
+        )
+        
+        if analysis_result.get("style"):
+            memory.update_style(analysis_result["style"])
+        if analysis_result.get("audience"):
+            memory.update_audience(analysis_result["audience"])
+        if analysis_result.get("estimated_words"):
+            memory.update_estimated_words(analysis_result["estimated_words"])
+        if analysis_result.get("estimated_sections"):
+            memory.update_estimated_sections(analysis_result["estimated_sections"])
+        
         memory.save()
         
         current_outline = {
@@ -183,15 +300,25 @@ class RuntimeLoop:
         }
         
         previous_feedback = memory.get_feedback_summary()
+        updated_requirements = memory.get_current_requirements()
         
-        revised_outline = self.outline_agent.revise_outline(
+        revised_outline, metrics = self.outline_agent.revise_outline(
             topic=state.topic,
             current_outline=current_outline,
             feedback=feedback,
             previous_feedback=previous_feedback,
-            style=state.style,
-            audience=state.audience
+            style=updated_requirements.get("style") or state.style,
+            audience=updated_requirements.get("audience") or state.audience
         )
+        
+        evaluation.record_revision(
+            phase="OUTLINE_REVIEW",
+            duration=metrics["duration"],
+            prompt_tokens=metrics["prompt_tokens"],
+            completion_tokens=metrics["completion_tokens"],
+            total_tokens=metrics["total_tokens"]
+        )
+        evaluation.save()
         
         state.sections = []
         state.metadata["title"] = revised_outline.get("title", state.topic)
@@ -214,14 +341,10 @@ class RuntimeLoop:
             "revision_count": memory.memory["revision_count"]
         }
     
-    def approve_outline(self, task_id: str) -> None:
-        state = self.state_manager.load_state(task_id)
-        if state and state.phase == ArticlePhase.WAITING_USER_APPROVAL:
-            state.phase = ArticlePhase.DRAFTING
-            self.state_manager.save_state(state)
-    
     def request_revision(self, task_id: str, section_id: int, feedback: str) -> None:
         state = self.state_manager.load_state(task_id)
+        evaluation = Evaluation.load(task_id)
+        
         if state:
             self.state_manager.add_feedback(task_id, feedback)
             
@@ -233,7 +356,7 @@ class RuntimeLoop:
             
             for section in state.sections:
                 if section.id == section_id:
-                    result = self.writer_agent.rewrite_section(
+                    result, metrics = self.writer_agent.rewrite_section(
                         topic=state.topic,
                         section_title=section.title,
                         current_content=section.content or "",
@@ -241,6 +364,16 @@ class RuntimeLoop:
                         style=state.style,
                         audience=state.audience
                     )
+                    
+                    evaluation.record_revision(
+                        phase="DRAFT_REVIEW",
+                        duration=metrics["duration"],
+                        prompt_tokens=metrics["prompt_tokens"],
+                        completion_tokens=metrics["completion_tokens"],
+                        total_tokens=metrics["total_tokens"]
+                    )
+                    evaluation.save()
+                    
                     self.state_manager.update_section(
                         task_id=task_id,
                         section_id=section_id,
@@ -257,3 +390,6 @@ class RuntimeLoop:
     
     def get_memory(self, task_id: str) -> Optional[Memory]:
         return Memory.load(task_id)
+    
+    def get_evaluation(self, task_id: str) -> Optional[Evaluation]:
+        return Evaluation.load(task_id)

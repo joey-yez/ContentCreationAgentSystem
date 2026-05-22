@@ -21,7 +21,23 @@ def new(topic: str, style: str = None, audience: str = None, words: int = None, 
         while True:
             action = typer.prompt("请选择操作：(a)批准大纲 / (r)修改大纲 / (q)退出", default="a")
             if action.lower() == "a":
-                runtime.approve_outline(task_id)
+                approval_result = runtime.approve_outline(task_id)
+                if approval_result.get("error"):
+                    typer.echo(f"错误: {approval_result['error']}")
+                    continue
+                
+                outline_eval = approval_result.get("evaluation", {})
+                typer.echo("\n" + "="*60)
+                typer.echo("大纲评估结果")
+                typer.echo("="*60)
+                typer.echo(f"评分: {outline_eval.get('score', 0)}/10")
+                typer.echo(f"反馈: {outline_eval.get('feedback', '')}")
+                if outline_eval.get('criteria'):
+                    typer.echo("\n评估维度:")
+                    for crit in outline_eval['criteria']:
+                        typer.echo(f"  - {crit['name']}: {crit['score']}/10")
+                typer.echo("="*60)
+                
                 draft(task_id)
                 break
             elif action.lower() == "r":
@@ -31,7 +47,7 @@ def new(topic: str, style: str = None, audience: str = None, words: int = None, 
                     typer.echo(f"错误: {revise_result['error']}")
                 else:
                     typer.echo(f"\n大纲已修改，第 {revise_result['revision_count']} 次修订")
-                    state = runtime.get_state(task_id).dict()
+                    state = runtime.get_state(task_id).model_dump()
                     show_outline(state)
             elif action.lower() == "q":
                 break
@@ -43,8 +59,14 @@ def draft(task_id: str):
     while True:
         result = runtime.run(task_id)
         if result.get("status") == "completed":
-            typer.echo(f"文章生成完成！")
+            typer.echo(f"\n文章生成完成！")
+            evaluation = runtime.get_evaluation(task_id)
+            if evaluation:
+                typer.echo(evaluation.get_detailed_report())
             break
+        elif result.get("status") == "drafting_progress":
+            progress = result.get("progress", {})
+            typer.echo(f"已完成章节: {progress.get('completed_count', 0)}/{progress.get('total_count', 0)} - {progress.get('section_title', '')}")
         elif result.get("status") == "waiting_user_input":
             state = result.get("state")
             show_progress(state)
@@ -73,7 +95,7 @@ def revise_outline_cmd(task_id: str, feedback: str):
         typer.echo(f"错误: {result['error']}")
     else:
         typer.echo(f"大纲已修改，第 {result['revision_count']} 次修订")
-        state = runtime.get_state(task_id).dict()
+        state = runtime.get_state(task_id).model_dump()
         show_outline(state)
 
 @app.command()
@@ -90,7 +112,12 @@ def export(task_id: str):
     
     title = state.metadata.get("title", state.topic)
     export_path = export_tool.export(title, sections_data, task_id)
-    typer.echo(f"文章已导出到: {export_path}")
+    typer.echo(f"\n文章已导出到: {export_path}")
+    
+    evaluation = runtime.get_evaluation(task_id)
+    if evaluation:
+        typer.echo("\n" + "="*60)
+        typer.echo(evaluation.get_detailed_report())
 
 @app.command()
 def show(task_id: str):
@@ -99,7 +126,12 @@ def show(task_id: str):
         typer.echo("任务不存在")
         return
     
-    show_progress(state.dict())
+    show_progress(state.model_dump())
+    
+    evaluation = runtime.get_evaluation(task_id)
+    if evaluation:
+        typer.echo("\n" + "="*60)
+        typer.echo(evaluation.get_summary())
 
 @app.command()
 def show_memory(task_id: str):
@@ -127,6 +159,15 @@ def show_memory(task_id: str):
     
     typer.echo(f"\n【修订次数】: {memory.memory['revision_count']}")
     typer.echo("\n" + "="*60)
+
+@app.command()
+def show_evaluation(task_id: str):
+    evaluation = runtime.get_evaluation(task_id)
+    if not evaluation:
+        typer.echo("Evaluation not found")
+        return
+    
+    typer.echo(evaluation.get_detailed_report())
 
 def show_outline(state: dict):
     typer.echo("\n" + "="*60)

@@ -9,13 +9,38 @@ class MarkdownExportTool:
     
     def export(self, title: str, sections: List[Dict[str, Any]], 
                task_id: str = None) -> str:
-        markdown_content = f"# {title}\n\n"
+        lines = []
         
-        for section in sections:
+        lines.append(f"# {title}")
+        lines.append("")
+        lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        
+        for idx, section in enumerate(sections, 1):
             section_title = section.get("title", "")
             content = section.get("content", "")
-            markdown_content += f"## {section_title}\n\n"
-            markdown_content += f"{content}\n\n"
+            
+#            lines.append(f"## {idx}. {section_title}")
+#            lines.append("")
+            
+            if content:
+                processed_content = self._process_content(content)
+                lines.append(processed_content)
+            else:
+                lines.append("*（内容待补充）*")
+            
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+        
+        if lines and lines[-1] == "---\n":
+            lines.pop()
+        if lines and lines[-1] == "":
+            lines.pop()
+        
+        markdown_content = "\n".join(lines)
         
         if task_id:
             filename = f"{task_id}.md"
@@ -30,16 +55,52 @@ class MarkdownExportTool:
         
         return file_path
     
+    def _process_content(self, content: str) -> str:
+        lines = content.split('\n')
+        processed_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            
+            if not line:
+                processed_lines.append("")
+                continue
+            
+            if line.startswith('## ') or line.startswith('### ') or line.startswith('# '):
+                processed_lines.append(line)
+            elif line.startswith('- ') or line.startswith('* ') or line.startswith('+ '):
+                processed_lines.append(f"  {line}")
+            elif line.startswith('1. ') or line.startswith('1) ') or line.startswith('(1) '):
+                processed_lines.append(f"  {line}")
+            elif line.startswith('> '):
+                processed_lines.append(f"> {line[2:]}")
+            elif line.startswith('```'):
+                processed_lines.append(line)
+            elif line.startswith('|'):
+                processed_lines.append(line)
+            elif len(line) > 50 and not line.startswith((' ', '\t', '#', '-', '*', '+', '>', '|', '`')):
+                processed_lines.append(line)
+            else:
+                processed_lines.append(line)
+        
+        return "\n".join(processed_lines)
+    
     def preview(self, title: str, sections: List[Dict[str, Any]]) -> str:
-        preview_content = f"# {title}\n\n"
+        lines = []
+        
+        lines.append(f"# {title}")
+        lines.append("")
         
         for i, section in enumerate(sections, 1):
             section_title = section.get("title", "")
             content = section.get("content", "")[:200] if section.get("content") else ""
-            preview_content += f"## {i}. {section_title}\n\n"
+            
+            lines.append(f"## {i}. {section_title}")
+            lines.append("")
             if content:
-                preview_content += f"{content}...\n\n"
+                lines.append(f"{content}...")
             else:
-                preview_content += "(未生成)\n\n"
+                lines.append("(未生成)")
+            lines.append("")
         
-        return preview_content
+        return "\n".join(lines)

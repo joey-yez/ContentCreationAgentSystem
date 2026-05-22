@@ -63,6 +63,28 @@ class Memory:
     def get_initial_input(self) -> Dict[str, Any]:
         return self.memory["initial_input"]
     
+    def update_requirement(self, key: str, value: Any) -> None:
+        if key in ["style", "audience", "estimated_words", "estimated_sections"]:
+            old_value = self.memory["initial_input"].get(key)
+            if old_value != value:
+                self.memory["initial_input"][key] = value
+                self.add_preference(key, value)
+    
+    def update_estimated_sections(self, new_sections: int) -> None:
+        self.update_requirement("estimated_sections", new_sections)
+    
+    def update_estimated_words(self, new_words: int) -> None:
+        self.update_requirement("estimated_words", new_words)
+    
+    def update_style(self, new_style: str) -> None:
+        self.update_requirement("style", new_style)
+    
+    def update_audience(self, new_audience: str) -> None:
+        self.update_requirement("audience", new_audience)
+    
+    def get_current_requirements(self) -> Dict[str, Any]:
+        return self.memory["initial_input"].copy()
+    
     def validate_constraints(self, new_request: Dict[str, Any]) -> List[str]:
         violations = []
         
