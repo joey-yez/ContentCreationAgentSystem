@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any, Tuple
 from llm_client import LLMClient, LLMResult
 import json
 
-DEBUG = True
+DEBUG = False
 
 class WriterAgent:
     def __init__(self):

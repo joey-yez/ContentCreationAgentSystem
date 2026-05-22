@@ -70,19 +70,31 @@ class RuntimeLoop:
             
             if state.phase == ArticlePhase.CREATED:
                 self._process_created(state)
+                self.state_manager.save_state(state)
             elif state.phase == ArticlePhase.UNDERSTANDING_TOPIC:
                 self._process_understanding_topic(state, evaluation)
+                self.state_manager.save_state(state)
+                evaluation.save()
             elif state.phase == ArticlePhase.OUTLINE_GENERATED:
                 self._process_outline_generated(state)
+                self.state_manager.save_state(state)
             elif state.phase == ArticlePhase.DRAFTING:
-                self._process_drafting(state, evaluation)
+                progress_info = self._process_drafting(state, evaluation)
+                self.state_manager.save_state(state)
+                evaluation.save()
+                return {
+                    "status": "drafting_progress",
+                    "task_id": task_id,
+                    "phase": state.phase.value,
+                    "progress": progress_info,
+                    "state": state.model_dump()
+                }
             elif state.phase == ArticlePhase.WAITING_REVIEW:
                 pass
             elif state.phase == ArticlePhase.READY_TO_EXPORT:
                 self._process_ready_to_export(state, evaluation)
-            
-            self.state_manager.save_state(state)
-            evaluation.save()
+                self.state_manager.save_state(state)
+                evaluation.save()
         
         return {
             "status": "completed",
@@ -124,12 +136,22 @@ class RuntimeLoop:
     def _process_outline_generated(self, state: ArticleState) -> None:
         state.phase = ArticlePhase.WAITING_USER_APPROVAL
     
-    def _process_drafting(self, state: ArticleState, evaluation: Evaluation) -> None:
+    def _process_drafting(self, state: ArticleState, evaluation: Evaluation) -> Dict[str, Any]:
         pending_sections = [s for s in state.sections if not s.completed]
         
         if not pending_sections:
             state.phase = ArticlePhase.WAITING_REVIEW
-            return
+            
+            completed_count = len(state.sections)
+            total_count = len(state.sections)
+            
+            return {
+                "current_section": total_count,
+                "section_title": "所有章节",
+                "completed_count": completed_count,
+                "total_count": total_count,
+                "progress_percent": 100.0
+            }
         
         current_section = pending_sections[0]
         
@@ -166,6 +188,17 @@ class RuntimeLoop:
         if updated_state:
             state.sections = updated_state.sections
             state.current_section = updated_state.current_section
+        
+        completed_count = sum(1 for s in state.sections if s.completed)
+        total_count = len(state.sections)
+        
+        return {
+            "current_section": current_section.id,
+            "section_title": current_section.title,
+            "completed_count": completed_count,
+            "total_count": total_count,
+            "progress_percent": (completed_count / total_count) * 100
+        }
     
     def _process_ready_to_export(self, state: ArticleState, evaluation: Evaluation) -> None:
         sections_data = [
